@@ -23,6 +23,7 @@ struct Config {
     no_effects: bool,
     windowed: bool,
     render_w: u32,
+    shark: bool,    // an occasional shark visit
 }
 
 const HELP: &str = "Reef aquarium. Settings you choose are remembered for next time.
@@ -38,6 +39,7 @@ Usage: aquarium [options]
   --day-length MIN      minutes for a full day and night (default 30); also turns the cycle on
   --speed X             speed of swimming and sway, 0.2-3 (default 1.0)
   --render-width N      internal render width in pixels (default 1600; lower = faster)
+  --no-shark            no shark visits (--shark turns them back on; they are rare: one every 10-25 minutes)
   --no-effects          turn off light rays and caustic shimmer
   --reset               ignore and overwrite the remembered settings
   --no-vsync            do not wait for the display refresh (benchmarking)
@@ -47,6 +49,7 @@ Usage: aquarium [options]
 Keys while running:
   F / D        add / remove a fish        Up / Right   faster
   P            pause / resume             Down / Left  slower
+  E            feed the fish              K  call the shark now   Shift+K  sharks on / off
   S            save a screenshot to screenshots/
   N            day/night cycle on / off     Shift+N  jump ahead in the day
   F11          fullscreen / window        Esc or Q     quit
@@ -55,7 +58,7 @@ Settings file: ~/.config/reef-aquarium/settings.conf (Windows: %APPDATA%\\reef-a
 ";
 
 fn parse_args() -> Config {
-    let mut c = Config { fish: 10, school: 7, grass: 16, bubbles: 45, motes: 90, day_min: 30.0, daynight: false, speed: 1.0, no_effects: false, windowed: false, render_w: 1600 };
+    let mut c = Config { fish: 10, school: 7, grass: 16, bubbles: 45, motes: 90, day_min: 30.0, daynight: false, speed: 1.0, no_effects: false, windowed: false, render_w: 1600, shark: true };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.iter().any(|a| a == "--reset") { load_settings(&mut c); }
     let mut i = 0;
@@ -74,6 +77,8 @@ fn parse_args() -> Config {
             "--no-vsync" => unsafe { std::env::set_var("AQUARIUM_NOVSYNC", "1") },
             "--fps" => unsafe { std::env::set_var("AQUARIUM_FPS", "1") },
             "--no-effects" => c.no_effects = true,
+            "--shark" => c.shark = true,
+            "--no-shark" => c.shark = false,
             "--fish" => { c.fish = num(i, "--fish").clamp(0.0, FISH_MAX as f32) as usize; i += 1; }
             "--school" => { c.school = num(i, "--school").clamp(0.0, 7.0) as usize; i += 1; }
             "--grass" => { c.grass = num(i, "--grass").clamp(0.0, 40.0) as usize; i += 1; }
@@ -125,6 +130,7 @@ fn load_settings(c: &mut Config) {
             "speed" => if let Ok(x) = v.parse::<f32>() { c.speed = x.clamp(0.2, 3.0) },
             "effects" => c.no_effects = v == "off",
             "windowed" => c.windowed = v == "true",
+            "shark" => c.shark = v == "on",
             "render_width" => if let Ok(n) = v.parse::<u32>() { c.render_w = n.clamp(480, 3840) },
             _ => {}
         }
@@ -136,8 +142,8 @@ fn save_settings(c: &Config) {
     let Some(path) = settings_path() else { return };
     if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
     let text = format!(
-        "fish={}\nschool={}\ngrass={}\nbubbles={}\nmotes={}\nday_length={}\nday_night={}\nspeed={:.2}\neffects={}\nwindowed={}\nrender_width={}\n",
-        c.fish, c.school, c.grass, c.bubbles, c.motes, c.day_min, if c.daynight { "on" } else { "off" }, c.speed, if c.no_effects { "off" } else { "on" }, c.windowed, c.render_w);
+        "fish={}\nschool={}\ngrass={}\nbubbles={}\nmotes={}\nday_length={}\nday_night={}\nspeed={:.2}\neffects={}\nwindowed={}\nrender_width={}\nshark={}\n",
+        c.fish, c.school, c.grass, c.bubbles, c.motes, c.day_min, if c.daynight { "on" } else { "off" }, c.speed, if c.no_effects { "off" } else { "on" }, c.windowed, c.render_w, if c.shark { "on" } else { "off" });
     let _ = std::fs::write(path, text);
 }
 
@@ -163,6 +169,9 @@ fn main() {
         .add_systems(PostStartup, hide_fx)
         .add_systems(Startup, setup_osd)
         .insert_resource(Osd::default())
+        .insert_resource(FeedReq(false))
+        .insert_resource(SharkClock { next: 0.0, summon: false })
+        .add_systems(Update, (debug_triggers, feed_start, animate_flakes, shark_ai))
         .add_systems(Update, (swim, drift, school_target, sway_grass, animate_bubbles, light_rocks, update_osd, crab_walk, animate_motes, camera_drift, day_night, auto_shot, animate_light, controls, fps_log, auto_quality, fit_upscale))
         .run();
 }
@@ -178,6 +187,8 @@ fn controls(
     mut osd: ResMut<Osd>,
     real: Res<Time<Real>>,
     mut day: ResMut<DayCycle>,
+    mut feed: ResMut<FeedReq>,
+    mut clock: ResMut<SharkClock>,
 ) {
     let now = real.elapsed_secs();
     if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyQ) {
@@ -231,6 +242,20 @@ fn controls(
         println!("screenshot: {path}");
         osd.show_hud(now, "Screenshot saved");
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+    }
+    if keys.just_pressed(KeyCode::KeyE) {
+        feed.0 = true;
+        osd.show_hud(now, "Feeding time");
+    }
+    if keys.just_pressed(KeyCode::KeyK) {
+        if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+            cfg.shark = !cfg.shark;
+            osd.show_hud(now, if cfg.shark { "Shark visits: on" } else { "Shark visits: off" });
+            changed = true;
+        } else {
+            clock.summon = true;
+            osd.show_hud(now, "A shadow in the distance...");
+        }
     }
     if keys.just_pressed(KeyCode::KeyN) {
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
@@ -299,6 +324,8 @@ struct Fish {
     seen: u32,
     idx: usize,
     low: bool, // bottom-dweller: swims just above the sand
+    gone: bool, // eaten school fish: back with the next pass of the school
+    food: Option<Entity>, // the flake this fish is swimming up to
 }
 
 #[derive(Resource)]
@@ -321,6 +348,7 @@ fn thick_for(path: &str) -> &'static [u8] {
         "fish/bicolor.png" => include_bytes!("../assets/fish/bicolor.thick"),
         "fish/firefish.png" => include_bytes!("../assets/fish/firefish.thick"),
         "fish/mandarin.png" => include_bytes!("../assets/fish/mandarin.thick"),
+        "fish/shark.png" => include_bytes!("../assets/fish/shark.thick"),
         _ => include_bytes!("../assets/fish/chromis.thick"),
     }
 }
@@ -661,7 +689,28 @@ fn setup(
             MeshMaterial3d(mat),
             Transform::from_translation(if off_now { Vec3::new(-3.0, home.y, home.z) } else { home }),
             if off_now { Visibility::Hidden } else { Visibility::Inherited },
-            Fish { len, height: len / aspect, depth: len * 0.07, phase, home, speed, target: home, wait: if off_now { 1.0 } else { 0.0 }, yaw: 0.0, vel: 0.0, rng: 2463534242u32.wrapping_add((phase * 1000.0) as u32), dart: 0.0, school, offset, thick: thick_for(path), dir: if school { 1.0 } else if home.x < 0.0 { 1.0 } else { -1.0 }, hover: 0.0, vy: 0.0, pitch: 0.0, sp: if school { 0.0 } else { 0.10 + 0.05 * speed }, seen: 0, idx: ind_i, low: path.contains("mandarin") },
+            Fish { len, height: len / aspect, depth: len * 0.07, phase, home, speed, target: home, wait: if off_now { 1.0 } else { 0.0 }, yaw: 0.0, vel: 0.0, rng: 2463534242u32.wrapping_add((phase * 1000.0) as u32), dart: 0.0, school, offset, thick: thick_for(path), dir: if school { 1.0 } else if home.x < 0.0 { 1.0 } else { -1.0 }, hover: 0.0, vy: 0.0, pitch: 0.0, sp: if school { 0.0 } else { 0.10 + 0.05 * speed }, seen: 0, idx: ind_i, low: path.contains("mandarin"), gone: false, food: None },
+        ));
+    }
+    // the occasional visitor: a whitetip reef shark, hidden until its turn comes
+    {
+        let (len, aspect) = (0.95f32, 2.6786f32);
+        commands.spawn((
+            Mesh3d(meshes.add(fish_mesh(thick_for("fish/shark.png")))),
+            MeshMaterial3d(mats.add(StandardMaterial {
+                base_color_texture: Some(assets.load("fish/shark.png")),
+                alpha_mode: AlphaMode::Mask(0.5),
+                double_sided: true,
+                cull_mode: None,
+                unlit: true,
+                fog_enabled: false,
+                base_color: Color::srgb(0.92, 0.97, 1.0),
+                ..default()
+            })),
+            Transform::from_xyz(-3.0, 0.0, 0.0),
+            Visibility::Hidden,
+            Fish { len, height: len / aspect, depth: len * 0.07, phase: 0.0, home: Vec3::ZERO, speed: 0.45, target: Vec3::ZERO, wait: 0.0, yaw: 0.0, vel: 0.55, rng: 99991, dart: 0.0, school: false, offset: Vec3::ZERO, thick: thick_for("fish/shark.png"), dir: 1.0, hover: 0.0, vy: 0.0, pitch: 0.0, sp: 0.0, seen: 0, idx: usize::MAX, low: false, gone: false, food: None },
+            Shark { active: false, prey: None, eats: 0 },
         ));
     }
 }
@@ -671,9 +720,10 @@ fn swim(
     cfg: Res<Config>,
     day: Res<DayCycle>,
     mut meshes: ResMut<Assets<Mesh>>,
-    q: Query<(&Mesh3d, &Fish, &Transform)>,
+    q: Query<(&Mesh3d, &Fish, &Transform, &Visibility)>,
 ) {
-    for (m, f, tf) in &q {
+    for (m, f, tf, vis) in &q {
+        if *vis == Visibility::Hidden { continue; }
         let t = time.elapsed_secs() * cfg.speed * f.speed + f.phase;
         let Some(mut mesh) = meshes.get_mut(&m.0) else { continue };
         let n = (NX + 1) * (NY + 1);
@@ -734,7 +784,7 @@ fn auto_shot(mut commands: Commands, time: Res<Time>, mut done: Local<bool>, mut
 
 /// Fish always face the way they swim, never turn on screen: they cross the tank, leave
 /// through a side, wait out of sight, and come back in from either side.
-fn drift(time: Res<Time>, cfg: Res<Config>, day: Res<DayCycle>, st: Res<SchoolTarget>, mut q: Query<(&mut Transform, &mut Fish, &mut Visibility)>) {
+fn drift(time: Res<Time>, cfg: Res<Config>, day: Res<DayCycle>, st: Res<SchoolTarget>, mut flakes: Query<(Entity, &Transform, &mut Flake), Without<Fish>>, mut commands: Commands, mut q: Query<(&mut Transform, &mut Fish, &mut Visibility), Without<Shark>>) {
     let dt = time.delta_secs().min(0.1);
     let trace = std::env::var("AQUARIUM_TRACE").is_ok();
     let showcase = std::env::var("AQUARIUM_SHOWCASE").is_ok();
@@ -754,6 +804,10 @@ fn drift(time: Res<Time>, cfg: Res<Config>, day: Res<DayCycle>, st: Res<SchoolTa
         let cruise = (0.10 + 0.05 * f.speed) * cfg.speed * (1.0 - 0.5 * night);
         let band = 0.30 * (1.0 - 0.6 * night);
         let (ybase, yrange) = if f.low { (0.055, 0.05) } else { (0.20, band) };
+        if f.school && f.gone {
+            // eaten: stays away until the school next comes round
+            if f.seen != st.epoch { f.gone = false; *vis = Visibility::Inherited; } else { *vis = Visibility::Hidden; continue; }
+        }
         if f.school {
             f.target = st.pos + f.offset;
             if f.seen != st.epoch {
@@ -800,27 +854,70 @@ fn drift(time: Res<Time>, cfg: Res<Config>, day: Res<DayCycle>, st: Res<SchoolTa
                 want_sp = if f.dart > 0.0 { cruise * 2.2 } else { cruise };
                 f.dart = (f.dart - dt).max(0.0);
             }
+            let mut want_sp = want_sp;
+            let mut feed_vy: Option<f32> = None;
+            if f.food.is_none() && !f.low && f.idx < cfg.fish {
+                // any food in this fish's own depth lane and ahead of it: go for the nearest
+                let mut best: Option<(Entity, f32)> = None;
+                for (e, ft, fl) in &flakes {
+                    if fl.taken || fl.landed > 0.0 || (ft.translation.z - f.home.z).abs() > 0.02 || ft.translation.y < FLOOR + 0.05 { continue; }
+                    let dx = (ft.translation.x - tf.translation.x) * f.dir;
+                    if dx > 0.03 && dx < 1.3 && best.map_or(true, |b| dx < b.1) { best = Some((e, dx)); }
+                }
+                if let Some((e, _)) = best {
+                    if let Ok((_, _, mut fl)) = flakes.get_mut(e) { fl.taken = true; }
+                    f.food = Some(e);
+                }
+            }
+            if let Some(e) = f.food {
+                match flakes.get_mut(e) {
+                    Ok((_, ft, mut fl)) => {
+                        let dx = (ft.translation.x - tf.translation.x) * f.dir;
+                        let dyf = ft.translation.y - tf.translation.y;
+                        if dx < -0.05 || fl.landed > 0.0 {
+                            fl.taken = false;
+                            f.food = None; // swam past it
+                        } else if dx < 0.05 && dyf.abs() < 0.05 {
+                            commands.entity(e).despawn(); // gulp
+                            println!("ate food");
+                            f.food = None;
+                        } else {
+                            f.hover = 0.0;
+                            f.dart = 0.0;
+                            rate = 1.0;
+                            want_sp = (dx * 1.6).clamp(0.05, cruise * 2.0);
+                            feed_vy = Some((dyf * 1.8).clamp(-0.24, 0.24));
+                        }
+                    }
+                    Err(_) => f.food = None,
+                }
+            }
             f.sp += (want_sp - f.sp) * (dt * rate).min(1.0);
             f.vel = f.sp / 0.15;
             tf.translation.x += f.dir * f.sp * dt;
             // drift gently up/down toward a wandering height
             let dy = f.target.y - tf.translation.y;
             // fish change depth by swimming at a slope, not by sliding straight up or down: the climb rate is tied to forward speed
-            let vmax = f.sp * 0.3;
-            let vy_want = (dy * 0.5).clamp(-vmax, vmax);
-            f.vy += (vy_want - f.vy) * (dt * 0.6);
+            let (vy_want, vrate) = match feed_vy {
+                Some(v) => (v, 2.0),
+                None => { let vmax = f.sp * 0.3; ((dy * 0.5).clamp(-vmax, vmax), 0.6) }
+            };
+            f.vy += (vy_want - f.vy) * (dt * vrate).min(1.0);
             tf.translation.y += f.vy * dt;
             if dy.abs() < 0.02 {
                 f.target.y = FLOOR + ybase + yrange * rnd(&mut f.rng).powi(2);
             }
             if tf.translation.x.abs() > lim {
                 f.wait = 0.5 + 3.5 * rnd(&mut f.rng);
+                f.food = None;
                 if f.idx >= cfg.fish { *vis = Visibility::Hidden; } // removed fish leave and stay away
             }
         }
         f.yaw = if f.dir > 0.0 { 0.0 } else { std::f32::consts::PI };
-        let want = if f.school { 0.0 } else { (f.vy / f.sp.max(0.06)).atan().clamp(-0.3, 0.3) };
-        f.pitch += (want - f.pitch) * (dt * 1.2);
+        let feeding = f.food.is_some();
+        let pmax = if feeding { 0.9 } else { 0.3 };
+        let want = if f.school { 0.0 } else { (f.vy / f.sp.max(if feeding { 0.10 } else { 0.06 })).atan().clamp(-pmax, pmax) };
+        f.pitch += (want - f.pitch) * (dt * if feeding { 2.5 } else { 1.2 });
         let pitch = f.pitch * f.dir;
         tf.rotation = Quat::from_euler(EulerRot::YXZ, f.yaw, 0.0, pitch);
         if trace && ((!f.school && (f.len - 0.42).abs() < 1e-4) || (f.school && (f.phase - 2.1).abs() < 0.01)) && time.elapsed_secs() % 1.0 < dt {
@@ -1256,7 +1353,7 @@ fn setup_osd(mut commands: Commands) {
         )).with_children(|panel| {
             panel.spawn((
                 Role::HelpText,
-                Text::new("Keys\n\n  F / D           add / remove a fish\n  Up / Right      faster\n  Down / Left     slower\n  P               pause / resume\n  S               save a screenshot\n  N               day/night on / off\n  Shift+N         jump ahead in the day\n  F11             fullscreen / window\n  ? or H          this help\n  Esc or Q        quit\n\nSettings are remembered for next time."),
+                Text::new("Keys\n\n  F / D           add / remove a fish\n  Up / Right      faster\n  Down / Left     slower\n  P               pause / resume\n  E               feed the fish\n  K               call the shark (Shift+K: on / off)\n  S               save a screenshot\n  N               day/night on / off\n  Shift+N         jump ahead in the day\n  F11             fullscreen / window\n  ? or H          this help\n  Esc or Q        quit\n\nSettings are remembered for next time."),
                 txt(2.3),
                 TextColor(none),
             ));
@@ -1473,4 +1570,185 @@ fn day_night(
     for (h, ray) in &rays {
         if let Some(mut m) = mats.get_mut(&h.0) { m.base_color = Color::srgb(r.0 * ray.k, r.1 * ray.k, r.2 * ray.k); }
     }
+}
+
+
+// ---------------------------------------------------------------- feeding and the shark
+
+#[derive(Resource)]
+struct FeedReq(bool);
+
+#[derive(Component)]
+struct Flake { base_x: f32, phase: f32, sink: f32, spin: f32, size: f32, landed: f32, taken: bool }
+
+/// E: a pinch of flakes at the surface. Every fish that has a flake ahead of it swims up to take it (fish never turn, so a fish
+/// facing away from the spot simply skips this round).
+fn feed_start(
+    mut req: ResMut<FeedReq>,
+    cfg: Res<Config>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    assets: Res<AssetServer>,
+    fish: Query<(&Transform, &Fish, &Visibility), Without<Shark>>,
+    flakes: Query<(), With<Flake>>,
+    mut cache: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    mut seed: Local<u32>,
+) {
+    if !req.0 { return; }
+    req.0 = false;
+    if *seed == 0 { *seed = 0xC0FFEE; }
+    if flakes.iter().count() > 70 { return; }
+    let (mesh, mat) = cache.get_or_insert_with(|| (
+        meshes.add(Rectangle::new(1.0, 1.0)),
+        mats.add(StandardMaterial {
+            base_color_texture: Some(assets.load("tex/flake.png")),
+            base_color: Color::srgb(1.0, 1.0, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            fog_enabled: false,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        }),
+    )).clone();
+    let top = 0.47;
+    let spawn = |commands: &mut Commands, x: f32, y: f32, z: f32, seed: &mut u32| -> Entity {
+        let size = 0.020 + 0.014 * rnd(seed);
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            Transform::from_xyz(x, y, z).with_scale(Vec3::splat(size)),
+            Flake { base_x: x, phase: rnd(seed) * 6.28, sink: 0.040 + 0.025 * rnd(seed), spin: 0.4 + 1.2 * rnd(seed), size, landed: 0.0, taken: false },
+        )).id()
+    };
+    // flakes fall in the depth lanes of the fish in the tank, so every fish has some within reach
+    let lanes: Vec<f32> = fish.iter().filter(|(_, f, v)| !f.school && !f.low && !f.gone && f.idx < cfg.fish && **v != Visibility::Hidden).map(|(_, f, _)| f.home.z).collect();
+    for i in 0..(lanes.len() * 2 + 4) {
+        let z = if lanes.is_empty() { -0.30 + 0.44 * rnd(&mut seed) } else { lanes[i % lanes.len()] };
+        let (x, y) = (-0.8 + 1.6 * rnd(&mut seed), top + 0.35 * rnd(&mut seed));
+        spawn(&mut commands, x, y, z, &mut seed);
+    }
+}
+
+/// Flakes sink slowly, wobbling a little; the ones nobody takes settle on the sand and dissolve.
+fn animate_flakes(time: Res<Time>, cfg: Res<Config>, mut commands: Commands, mut q: Query<(Entity, &mut Transform, &mut Flake)>) {
+    let dt = time.delta_secs().min(0.1) * cfg.speed;
+    let t = time.elapsed_secs() * cfg.speed;
+    for (e, mut tf, mut fl) in &mut q {
+        if fl.landed > 0.0 {
+            fl.landed += dt;
+            let k = 1.0 - ((fl.landed - 8.0) / 3.0).clamp(0.0, 1.0);
+            tf.scale = Vec3::splat(fl.size * k);
+            if k <= 0.0 { commands.entity(e).despawn(); }
+            continue;
+        }
+        tf.translation.y -= fl.sink * dt;
+        tf.translation.x = fl.base_x + 0.02 * (t * 0.8 + fl.phase).sin();
+        tf.rotation = Quat::from_rotation_z(fl.phase + t * fl.spin * 0.3);
+        if tf.translation.y <= FLOOR + 0.02 {
+            tf.translation.y = FLOOR + 0.015;
+            fl.landed = 0.001;
+        }
+    }
+}
+
+#[derive(Resource)]
+struct SharkClock { next: f32, summon: bool }
+
+#[derive(Component)]
+struct Shark { active: bool, prey: Option<Entity>, eats: u32 }
+
+/// Now and then a shark crosses the tank in the depth lane of one of the fish, heads for it, and eats whatever it runs into.
+/// Fish ahead of it, swimming the same way, bolt; an eaten fish is gone for a minute or two (a school member, until the school comes round).
+fn shark_ai(
+    time: Res<Time>,
+    cfg: Res<Config>,
+    mut clock: ResMut<SharkClock>,
+    mut seed: Local<u32>,
+    mut sq: Query<(&mut Transform, &mut Fish, &mut Visibility, &mut Shark)>,
+    mut prey: Query<(Entity, &mut Transform, &mut Fish, &mut Visibility), Without<Shark>>,
+) {
+    if *seed == 0 { *seed = 0x5EED_1234; }
+    let dt = time.delta_secs().min(0.1);
+    let now = time.elapsed_secs();
+    let Ok((mut tf, mut sf, mut sv, mut sh)) = sq.single_mut() else { return };
+    let lim = 1.15 + sf.len * 0.5;
+    if !sh.active {
+        if clock.next == 0.0 { clock.next = now + 300.0 + 300.0 * rnd(&mut seed); }
+        if !(clock.summon || (cfg.shark && now >= clock.next)) { return; }
+        clock.summon = false;
+        let cands: Vec<(Entity, f32, f32, f32, f32)> = prey.iter()
+            .filter(|(_, t, f, v)| !f.school && !f.gone && f.wait <= 0.0 && f.idx < cfg.fish && **v != Visibility::Hidden && t.translation.x.abs() < 0.85)
+            .map(|(e, t, f, _)| (e, t.translation.x, t.translation.y, t.translation.z, f.dir))
+            .collect();
+        if cands.is_empty() { clock.next = now + 60.0; return; }
+        let k = (rnd(&mut seed) * cands.len() as f32) as usize % cands.len();
+        let (e, _, py, pz, pdir) = cands[k];
+        sf.dir = -pdir; // head-on to its target
+        sf.yaw = if sf.dir > 0.0 { 0.0 } else { std::f32::consts::PI };
+        tf.translation = Vec3::new(-sf.dir * lim, py.clamp(FLOOR + 0.12, 0.42), pz);
+        tf.rotation = Quat::from_rotation_y(sf.yaw);
+        sf.sp = 0.2;
+        sf.vy = 0.0;
+        sf.pitch = 0.0;
+        *sh = Shark { active: true, prey: Some(e), eats: 0 };
+        *sv = Visibility::Inherited;
+        println!("shark arrives");
+        return;
+    }
+    let cruise = 0.24 * cfg.speed;
+    let mouth_x = tf.translation.x + sf.dir * sf.len * 0.5;
+    let mouth_y = tf.translation.y - sf.height * 0.1;
+    let mut want_sp = cruise;
+    let mut vy_want = 0.0;
+    if let Some(pe) = sh.prey {
+        let mut keep = false;
+        if let Ok((_, pt, pf, pv)) = prey.get(pe) {
+            if *pv != Visibility::Hidden && !pf.gone && pf.wait <= 0.0 {
+                let ahead = (pt.translation.x - mouth_x) * sf.dir;
+                if ahead > -0.1 {
+                    keep = true;
+                    vy_want = ((pt.translation.y - mouth_y) * 1.2).clamp(-0.18, 0.18);
+                    if ahead < 0.6 { want_sp = cruise * 1.6; }
+                }
+            }
+        }
+        if !keep { sh.prey = None; }
+    }
+    sf.sp += (want_sp - sf.sp) * (dt * 0.8).min(1.0);
+    tf.translation.x += sf.dir * sf.sp * dt;
+    sf.vy += (vy_want - sf.vy) * (dt * 1.5).min(1.0);
+    tf.translation.y = (tf.translation.y + sf.vy * dt).clamp(FLOOR + 0.1, 0.45);
+    sf.pitch += ((sf.vy / sf.sp.max(0.1)).atan().clamp(-0.3, 0.3) - sf.pitch) * (dt * 1.2).min(1.0);
+    tf.rotation = Quat::from_euler(EulerRot::YXZ, sf.yaw, 0.0, sf.pitch * sf.dir);
+    for (_, pt, mut pf, mut pv) in &mut prey {
+        if *pv == Visibility::Hidden || pf.gone || (!pf.school && pf.wait > 0.0) { continue; }
+        let dxm = (pt.translation.x - mouth_x) * sf.dir;
+        let dy = (pt.translation.y - mouth_y).abs();
+        let dz = (pt.translation.z - tf.translation.z).abs();
+        if sh.eats < 2 && dxm > -0.15 && dxm < 0.09 && dy < 0.10 && dz < 0.22 {
+            if pf.school { pf.gone = true; } else { pf.wait = 60.0 + 90.0 * rnd(&mut seed); pf.food = None; }
+            *pv = Visibility::Hidden;
+            sh.eats += 1;
+            println!("shark ate a fish");
+        } else if !pf.school && pf.dir == sf.dir && dxm > 0.0 && dxm < 0.8 && dz < 0.2 {
+            pf.dart = pf.dart.max(1.2); // bolt away
+            pf.hover = 0.0;
+        }
+    }
+    if tf.translation.x * sf.dir > lim {
+        sh.active = false;
+        *sv = Visibility::Hidden;
+        clock.next = now + 600.0 + 900.0 * rnd(&mut seed);
+        println!("shark leaves");
+    }
+}
+
+/// Dev aid: AQUARIUM_FEED_AT=secs presses the feed key then; AQUARIUM_SHARK_AT=secs calls the shark.
+fn debug_triggers(time: Res<Time>, mut feed: ResMut<FeedReq>, mut clock: ResMut<SharkClock>, mut done: Local<(bool, bool)>) {
+    let at = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
+    let t = time.elapsed_secs();
+    if let Some(a) = at("AQUARIUM_FEED_AT") { if !done.0 && t > a { done.0 = true; feed.0 = true; } }
+    if let Some(a) = at("AQUARIUM_SHARK_AT") { if !done.1 && t > a { done.1 = true; clock.summon = true; } }
 }

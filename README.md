@@ -57,6 +57,8 @@ Unpack it anywhere and run the `aquarium` program inside (keep the `assets` fold
 | `Up` or `Right` / `Down` or `Left` | faster / slower |
 | `P` | pause / resume |
 | `S` | save a screenshot to a `screenshots` folder |
+| `E` | feed the fish: flakes sink from the top and the fish swim up to take them |
+| `K` | call the shark now (`Shift+K` turns shark visits on or off) |
 | `N` | switch the day/night cycle on or off (`Shift+N` jumps ahead in the day) |
 | `?` or `H` | show the key list (fades after a few seconds) |
 | `F11` | fullscreen / window |
@@ -73,6 +75,7 @@ aquarium [options]
   --school N            small green fish in the school, 0-7 (default 7)
   --grass N             seagrass clumps, 0-40 (default 16)
   --bubbles N           bubbles, 0-120 (default 45)
+  --no-shark            no shark visits (rare by default: one every 10-25 minutes)
   --motes N             drifting plankton specks, 0-300 (default 90)
   --speed X             speed of everything, 0.2-3 (default 1.0)
   --day-night           turn on the day and night cycle (--no-day-night turns it off)

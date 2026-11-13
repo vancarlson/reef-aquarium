@@ -24,6 +24,7 @@ Licence links: [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) ·
 | Bicolor angelfish (*Centropyge bicolor*) | [Centropyge bicolor 1.jpg](https://commons.wikimedia.org/wiki/File:Centropyge_bicolor_1.jpg) | Karelj | Public domain |
 | Firefish (*Nemateleotris magnifica*) | [Nemateleotris magnifica Prague 2011 1.jpg](https://commons.wikimedia.org/wiki/File:Nemateleotris_magnifica_Prague_2011_1.jpg) | Karelj | CC0 |
 | Mandarin dragonet (*Synchiropus splendidus*) | [Mandarin fish (Synchiropus splendidus) (45103629692).jpg](https://commons.wikimedia.org/wiki/File:Mandarin_fish_(Synchiropus_splendidus)_(45103629692).jpg) | Rickard Zerpe | CC BY 2.0 |
+| Whitetip reef shark (*Triaenodon obesus*) | [Whitetip-reef-shark.jpg](https://commons.wikimedia.org/wiki/File:Whitetip-reef-shark.jpg) | Jan Derk | Public domain |
 
 ## Reef and sand
 

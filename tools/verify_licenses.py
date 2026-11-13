@@ -7,6 +7,7 @@ FILES = [
  "Gramma loreto, Fairy Basslet.jpg", "Flame Angelfish Centropyge loricula.jpg", "Green.chromis.arp.jpg",
  "Centropyge bicolor 1.jpg", "Nemateleotris magnifica Prague 2011 1.jpg",
  "Mandarin fish (Synchiropus splendidus) (45103629692).jpg",
+ "Whitetip-reef-shark.jpg",
  "Coralline algae encrusted live rock.jpg", "Caulastraea y Zoanthus.jpg", "Zoanthus (pseudo Anêmona).jpg",
 ]
 for f in FILES:
