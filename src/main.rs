@@ -560,8 +560,8 @@ fn setup(
     let rocks = [
         ("rock/rock_a.png", 1.31, 0.62, -0.28, -0.45, 1.0, 0.95),
         ("rock/rock_b.png", 0.870, 0.28, -0.50, 0.30, 1.0, 1.0),
-        ("rock/zoa_mat.png", 1.89, 0.34, 0.12, -0.05, 1.0, 1.0),
-        ("rock/coral_teal.png", 0.843, 0.30, 0.30, -0.35, 1.0, 0.95),
+        ("rock/zoa_mat.png", 1.89, 0.43, 0.12, -0.37, 1.0, 1.0),
+        ("rock/coral_teal.png", 0.843, 0.315, 0.30, -0.42, 1.0, 0.95),
         ("rock/rock_c.png", 0.864, 0.36, 0.50, -0.75, 1.0, 0.80),
         ("rock/rock_d.png", 1.192, 0.46, -0.05, -1.05, 1.0, 0.62),
     ];
@@ -587,7 +587,7 @@ fn setup(
         }
         let mut ec = commands.spawn((
             Mesh3d(meshes.add(grid_quad(w, h, 22, 16))),
-            RockLight { nx: 22, ny: 16, w, h, flip },
+            RockLight { nx: 22, ny: 16, w, h, flip, sway: if path.contains("zoa") { 0.006 } else if path.contains("coral_teal") { 0.009 } else { 0.0 } },
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color_texture: Some(assets.load(path)),
                 base_color: Color::srgb(k * 0.85, k * 0.95, k * 1.1),
@@ -966,7 +966,7 @@ fn spawn_grass(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut As
         let k = c * 97 + 13;
         let cx = -1.0 + 2.0 * hash(k);
         let front = hash(k + 1) < 0.15;
-        let cz = if front { 0.18 + 0.15 * hash(k + 2) } else { -0.62 + 0.30 * hash(k + 2) };
+        let cz = if front { 0.18 + 0.15 * hash(k + 2) } else { -0.66 + 0.30 * hash(k + 2) };
         let scale = if front { 0.55 } else { 1.0 };
         let nb = 6 + (hash(k + 3) * 6.0) as u32;
         let haze = ((-cz - 0.30) / 0.4).clamp(0.0, 1.0);
@@ -1120,7 +1120,7 @@ fn light_mul(p: Vec3, t: f32, d: f32) -> f32 {
 }
 
 #[derive(Component)]
-struct RockLight { nx: usize, ny: usize, w: f32, h: f32, flip: f32 }
+struct RockLight { nx: usize, ny: usize, w: f32, h: f32, flip: f32, sway: f32 }
 
 fn grid_quad(w: f32, h: f32, nx: usize, ny: usize) -> Mesh {
     let mut pos = Vec::new();
@@ -1154,6 +1154,21 @@ fn light_rocks(time: Res<Time>, cfg: Res<Config>, day: Res<DayCycle>, mut meshes
     for (m, tf, r) in &q {
         let Some(mut mesh) = meshes.get_mut(&m.0) else { continue };
         let mut col = Vec::with_capacity((r.nx + 1) * (r.ny + 1));
+        if r.sway > 0.0 {
+            // soft corals and polyps sway in the current: the top bends most, the base stays put
+            let mut pos = Vec::with_capacity((r.nx + 1) * (r.ny + 1));
+            for j in 0..=r.ny {
+                let v = j as f32 / r.ny as f32;
+                let weight = (1.0 - v).powf(1.6);
+                for i in 0..=r.nx {
+                    let u = i as f32 / r.nx as f32;
+                    let ph = tf.translation.x * 7.0;
+                    let dx = r.sway * weight * ((t * 0.8 + ph + u * 5.0).sin() + 0.45 * (t * 1.9 + ph * 1.3 + v * 9.0).sin());
+                    pos.push([(u - 0.5) * r.w + dx, (0.5 - v) * r.h, 0.0]);
+                }
+            }
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+        }
         for j in 0..=r.ny {
             let ly = (0.5 - j as f32 / r.ny as f32) * r.h;
             for i in 0..=r.nx {

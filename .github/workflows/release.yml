@@ -46,6 +46,7 @@ jobs:
           mkdir "$NAME"
           cp "target/${{ matrix.target }}/release/aquarium${{ matrix.ext }}" "$NAME/"
           cp -r assets "$NAME/assets"
+          if [ "$RUNNER_OS" = "Linux" ]; then cp packaging/linux/install.sh packaging/linux/reef-aquarium.png "$NAME/"; fi
           cp README.md LICENSE CREDITS.md THIRD_PARTY_LICENSES.md "$NAME/"
           if [ "${{ matrix.archive }}" = "zip" ]; then
             7z a "$NAME.zip" "$NAME" > /dev/null

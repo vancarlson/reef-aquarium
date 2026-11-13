@@ -41,6 +41,14 @@ Unpack it anywhere and run the `aquarium` program inside (keep the `assets` fold
 >   in the folder, or right-click the program and choose *Open*.
 > * **Linux:** needs a working Vulkan or OpenGL driver (Mesa on most desktops).
 
+## Start it with one click, or at login
+
+* **Linux:** in the unpacked folder run `./install.sh` to add *Reef Aquarium* to your applications menu, or
+  `./install.sh --autostart` to also start it when you log in. `./install.sh --uninstall` removes both.
+* **Windows:** right-click `aquarium.exe` -> *Show more options* -> *Create shortcut*. To start it at login, press `Win+R`, type
+  `shell:startup`, and drop the shortcut into that folder.
+* **macOS:** drag the unpacked folder somewhere permanent, then *System Settings -> General -> Login Items* to add the `aquarium` program.
+
 ## Controls
 
 | Key | Action |
@@ -100,7 +108,8 @@ The source photos are not stored in this repository; they come from the links in
 
 * The fish are photographs on a 3D body, not full 3D models. They look best side-on, which is why they never turn on screen.
 * The seagrass and the rocks are the least photographic parts. The rocks are cut from a single photograph.
-* Fish can pass through rocks and coral in places.
+* Fish swim in fixed depth lanes in front of the rocks and coral, so they pass in front of or behind them but never through them.
+  That also means a fish never moves nearer to or farther from you.
 * Long-run behaviour is checked on one Linux machine only. On a laptop, check the heat if you leave it running for hours.
 
 ## Credits and licences
