@@ -1,0 +1,10 @@
+/target/
+/screenshots/
+.venv/
+__pycache__/
+# source photos and full-size originals (re-download them from the links in CREDITS.md if you want to regenerate assets)
+/assets_src/
+/assets_hi/
+# early experiment, not used by the app
+/blender/
+*.swp

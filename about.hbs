@@ -1,0 +1,25 @@
+# Third-party licences
+
+This program is built from the Rust crates below. Each is distributed under the licence shown; the full text follows.
+
+## Summary
+
+{{#each overview}}
+* {{{name}}} ({{count}} crate{{#if (gt count 1)}}s{{/if}})
+{{/each}}
+
+## Licence texts
+
+{{#each licenses}}
+### {{{name}}}
+
+Used by:
+{{#each used_by}}
+* {{{crate.name}}} {{crate.version}}{{#if crate.repository}} - {{crate.repository}}{{/if}}
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}
